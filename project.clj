@@ -23,7 +23,7 @@
                  [cheshire "5.13.0"]
                  [clj-time "0.15.2"]
                  [com.h2database/h2 "2.3.232"]
-                 [overtone/at-at "1.2.0"]
+                 [clojurewerkz/quartzite "2.1.0"]
                  [migratus "1.6.3"]]
   :main ^:skip-aot leaderboarder.core
   :target-path "target/%s"

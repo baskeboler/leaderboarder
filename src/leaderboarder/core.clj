@@ -8,7 +8,10 @@
     [ring.util.response :refer [response]]
     [ring.adapter.jetty :as jetty]
     [leaderboarder.db :as db]
-    [overtone.at-at :as at])
+    [clojurewerkz.quartzite.scheduler :as qs]
+    [clojurewerkz.quartzite.jobs :as jobs]
+    [clojurewerkz.quartzite.triggers :as t]
+    [clojurewerkz.quartzite.schedule.simple :as s])
   (:gen-class))
 
 ;; -----------------------------------------------------------------------------
@@ -16,18 +19,40 @@
 ;;
 ;; Each tick, all users receive one additional credit using a scheduler.
 
+(jobs/defjob CreditIncrementJob [ctx]
+  (let [data (.getMergedJobDataMap ctx)
+        db-spec (.get data "db-spec")]
+    (db/increment-all-credits db-spec)))
+
 (defn start-credit-incrementer
-  "Return a scheduler that increments every user's credits at a fixed interval."
+  "Initialize and start a Quartz scheduler that increments all user credits.
+  Returns a map containing the scheduler and job identifiers."
   [db-spec interval-ms]
-  (let [pool (at/mk-pool)
-        task (at/every interval-ms #(db/increment-all-credits db-spec) pool)]
-    {:pool pool :task task}))
+  (let [scheduler (qs/start (qs/initialize))
+        job-key (jobs/key "credit-incrementer-job")
+        trigger-key (t/key "credit-incrementer-trigger")
+        job (jobs/build
+              (jobs/of-type CreditIncrementJob)
+              (jobs/with-identity job-key)
+              (jobs/using-job-data {:db-spec db-spec}))
+        trigger (t/build
+                  (t/with-identity trigger-key)
+                  (t/start-now)
+                  (t/with-schedule (s/simple-schedule
+                                     (s/with-interval-in-milliseconds interval-ms)
+                                     (s/repeat-forever))))]
+    (qs/schedule scheduler job trigger)
+    {:scheduler scheduler :job-key job-key :trigger-key trigger-key}))
 
 (defn stop-credit-incrementer
-  "Cancel the periodic credit incrementer."
-  [{:keys [pool task]}]
-  (when task (at/cancel task))
-  (when pool (at/stop pool)))
+  "Unschedule the periodic credit incrementer job and shut down the scheduler."
+  [{:keys [scheduler job-key trigger-key]}]
+  (when (and scheduler trigger-key)
+    (qs/unschedule scheduler trigger-key))
+  (when (and scheduler job-key)
+    (qs/delete-job scheduler job-key))
+  (when scheduler
+    (qs/shutdown scheduler)))
 
 ;; -----------------------------------------------------------------------------
 ;; HTTP routes and handler
