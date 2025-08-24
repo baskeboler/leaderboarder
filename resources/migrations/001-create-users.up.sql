@@ -1,0 +1,10 @@
+CREATE TABLE users (
+  id INTEGER AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR NOT NULL UNIQUE,
+  score INTEGER DEFAULT 0,
+  credits INTEGER DEFAULT 0,
+  geography VARCHAR,
+  sex VARCHAR,
+  age_group VARCHAR,
+  last_active TIMESTAMP
+);
