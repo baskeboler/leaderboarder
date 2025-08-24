@@ -48,26 +48,26 @@
     ;; development runs.
   (jdbc/execute! db-spec
             (sql/format
-              {:create-table-if-not-exists :users
+              {:create-table [:users :if-not-exists]
                :with-columns
-               [[:id :serial :primary-key]
-                [:username :varchar :not-null :unique]
-                [:score :integer [:default 0]]
-                [:credits :integer [:default 0]]
-                [:geography :varchar]
-                [:sex :varchar]
-                [:age_group :varchar]
-                [:last_active :timestamp]]}))
+                   [[:id :serial :primary-key]
+                    [:username :varchar :not-null :unique]
+                    [:score :integer [:default 0]]
+                    [:credits :integer [:default 0]]
+                    [:geography :varchar]
+                    [:sex :varchar]
+                    [:age_group :varchar]
+                    [:last_active :timestamp]]}))
   ;; Create the leaderboards table.
   (jdbc/execute! db-spec
     (sql/format
-      {:create-table-if-not-exists :leaderboards
-       :with-columns
-       [[:id :serial :primary-key]
-        [:creator_id :integer [:references :users :id]]
-        [:name :varchar]
-        [:filters :text]
-        [:min_users :integer [:default 5]]]}))
+          {:create-table [:leaderboards :if-not-exists]
+           :with-columns
+           [[:id :serial :primary-key]
+            [:creator_id :integer [:references :users :id]]
+            [:name :varchar]
+            [:filters :text]
+            [:min_users :integer [:default 5]]]}))
   db-spec)
 
 ;; -----------------------------------------------------------------------------
