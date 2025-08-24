@@ -45,27 +45,29 @@
   [db-spec]
   ;; Create the users table if it doesn't already exist.  H2 will quietly
   ;; ignore the create if the table exists, which simplifies repeated
-  ;; development runs.
+    ;; development runs.
   (jdbc/execute! db-spec
-    (sql/format
-      (h/create-table-if-not-exists :users
-        (h/column :id :serial :primary-key true)
-        (h/column :username :varchar :not-null true :unique true)
-        (h/column :score :integer :default 0)
-        (h/column :credits :integer :default 0)
-        (h/column :geography :varchar)
-        (h/column :sex :varchar)
-        (h/column :age_group :varchar)
-        (h/column :last_active :timestamp))))
+            (sql/format
+              {:create-table-if-not-exists :users
+               :with-columns
+               [[:id :serial :primary-key]
+                [:username :varchar :not-null :unique]
+                [:score :integer [:default 0]]
+                [:credits :integer [:default 0]]
+                [:geography :varchar]
+                [:sex :varchar]
+                [:age_group :varchar]
+                [:last_active :timestamp]]}))
   ;; Create the leaderboards table.
   (jdbc/execute! db-spec
     (sql/format
-      (h/create-table-if-not-exists :leaderboards
-        (h/column :id :serial :primary-key true)
-        (h/column :creator_id :integer :references [:users :id])
-        (h/column :name :varchar)
-        (h/column :filters :text)
-        (h/column :min_users :integer :default 5))))
+      {:create-table-if-not-exists :leaderboards
+       :with-columns
+       [[:id :serial :primary-key]
+        [:creator_id :integer [:references :users :id]]
+        [:name :varchar]
+        [:filters :text]
+        [:min_users :integer [:default 5]]]}))
   db-spec)
 
 ;; -----------------------------------------------------------------------------
@@ -87,7 +89,7 @@
           (jdbc/execute! db-spec
             (sql/format
               (-> (h/update :users)
-                  (h/set {:credits (h/+ :credits 1)}))))))
+                  (h/set {:credits [:+ :credits 1]}))))))
       0 interval-ms)
     scheduler))
 
@@ -126,66 +128,69 @@
         (jdbc/execute! tx
           (sql/format
             (-> (h/update :users)
-                (h/set {:credits (h/- :credits 1)})
+                (h/set {:credits [:- :credits 1]})
                 (h/where [:= :id user-id]))))
         (if (= action :increment-self)
           ;; Increment the user's own score
           (jdbc/execute! tx
             (sql/format
               (-> (h/update :users)
-                  (h/set {:score (h/+ :score 1)})
+                  (h/set {:score [:+ :score 1]})
                   (h/where [:= :id user-id]))))
           ;; Otherwise decrement the target's score (if provided)
           (when target-id
             (jdbc/execute! tx
               (sql/format
                 (-> (h/update :users)
-                    (h/set {:score (h/- :score 1)})
+                    (h/set {:score [:- :score 1]})
                     (h/where [:= :id target-id])))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Leaderboard utilities
 
-(defn build-leaderboard-query
-  "Construct a HoneySQL query for a leaderboard given filter criteria.
+  (def ^:private EXTRA-LIMIT-BUFFER 10)
 
-  The returned query selects users sorted by descending score.  Filters are
-  applied dynamically based on the keys of the `filters` map.  Supported
-  filters include :geography, :sex, :age_group, and :time_of_day.  The
-  `time_of_day` filter interprets strings such as "morning" and "night"
-  against the `last_active` timestamp's hour (0–23).  The creator's ID is
-  accepted but not currently used here; it's passed for future extension."
-  [db-spec filters min-users creator-id]
-  (let [base (-> (h/select :*)
-                 (h/from :users)
-                 ;; Sort by descending score, tiebreak by ascending id for stability
-                 (h/order-by [:score :desc] [:id :asc])
-                 ;; Fetch a few extra rows beyond min-users to allow filtering
-                 (h/limit (+ min-users 10)))]
-    (sql/format
-      (reduce (fn [q [k v]]
-                (cond
-                  (= k :geography) (h/where q [:= :geography v])
-                  (= k :sex)       (h/where q [:= :sex v])
-                  (= k :age_group) (h/where q [:= :age_group v])
-                  (= k :time_of_day)
-                  ;; For time_of_day we expand to an SQL predicate on the HOUR of
-                  ;; last_active.  This simple case expression covers a couple of
-                  ;; example periods; extend as needed.
-                  (let [predicate (case v
-                                   "morning" (sql/raw "EXTRACT(HOUR FROM last_active) BETWEEN 6 AND 11")
-                                   "afternoon" (sql/raw "EXTRACT(HOUR FROM last_active) BETWEEN 12 AND 17")
-                                   "evening" (sql/raw "EXTRACT(HOUR FROM last_active) BETWEEN 18 AND 21")
-                                   "night" (sql/raw "EXTRACT(HOUR FROM last_active) BETWEEN 22 AND 5")
-                                   ;; Default: no additional constraint
-                                   true)]
-                    (if (= predicate true)
-                      q
-                      (h/where q [predicate true])))
-                  :else q))
-              base
-              filters))))
+  (defn- time-of-day->predicate
+    "Return a HoneySQL predicate for a given time-of-day label, or nil if unsupported.
+     Uses EXTRACT(HOUR FROM last_active), handling wrap-around for night."
+    [value]
+    (let [hour-expr (sql/format [:raw "EXTRACT(HOUR FROM last_active)"])]
+      (case value
+        "morning" [:between hour-expr 6 11]
+        "afternoon" [:between hour-expr 12 17]
+        "evening" [:between hour-expr 18 21]
+        "night" [:or [:between hour-expr 22 23]
+                 [:between hour-expr 0 5]]
+        nil)))
 
+  (defn build-leaderboard-query
+    "Construct a HoneySQL query for a leaderboard given filter criteria.
+    The returned query selects users sorted by descending score. Filters are
+    applied dynamically based on the keys of the `filters` map. Supported
+    filters include :geography, :sex, :age_group, and :time_of_day. The
+    creator's ID is accepted but not currently used here; it's passed for future extension."
+    [_db-spec filters min-users _creator-id]
+    (let [base-query (-> (h/select :*)
+                         (h/from :users)
+                         ;; Sort by descending score, tiebreak by ascending id for stability
+                         (h/order-by [:score :desc] [:id :asc])
+                         ;; Fetch a few extra rows beyond min-users to allow filtering
+                         (h/limit (+ min-users EXTRA-LIMIT-BUFFER)))]
+      (sql/format
+        (reduce-kv
+          (fn [q key value]
+            (case key
+              :geography (h/where q [:= :geography value])
+              :sex (h/where q [:= :sex value])
+              :age_group (h/where q [:= :age_group value])
+              :time_of_day
+              (if-let [pred (time-of-day->predicate value)]
+                (h/where q pred)
+                q)
+              ;; Unknown filter keys are ignored
+              q))
+          base-query
+          filters))))
 (defn create-leaderboard
   "Create a new leaderboard and return either the full leaderboard or an
   explanation of why the filters did not produce enough users or why the
