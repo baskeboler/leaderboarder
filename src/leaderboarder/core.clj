@@ -13,7 +13,8 @@
     [clojurewerkz.quartzite.triggers :as t]
     [clojurewerkz.quartzite.schedule.simple :as s]
     [clojure.string :as str])
-  (:gen-class))
+  (:gen-class)
+  (:import (org.eclipse.jetty.server Server)))
 
 (def tokens (atom {}))
 
@@ -41,7 +42,7 @@
         trigger (t/build
                   (t/with-identity trigger-key)
                   (t/start-now)
-                  (t/with-schedule (s/simple-schedule
+                  (t/with-schedule (s/schedule
                                      (s/with-interval-in-milliseconds interval-ms)
                                      (s/repeat-forever))))]
     (qs/schedule scheduler job trigger)
@@ -51,7 +52,7 @@
   "Unschedule the periodic credit incrementer job and shut down the scheduler."
   [{:keys [scheduler job-key trigger-key]}]
   (when (and scheduler trigger-key)
-    (qs/unschedule scheduler trigger-key))
+    (qs/delete-trigger scheduler trigger-key))
   (when (and scheduler job-key)
     (qs/delete-job scheduler job-key))
   (when scheduler
@@ -141,7 +142,7 @@
 (defmethod ig/init-key :server/jetty [_ {:keys [handler port]}]
   (jetty/run-jetty handler {:port port :join? false}))
 
-(defmethod ig/halt-key! :server/jetty [_ server]
+(defmethod ig/halt-key! :server/jetty [_ ^Server server]
   (.stop server))
 
 ;; -----------------------------------------------------------------------------

@@ -10,7 +10,7 @@
 ;; Database initialization via Migratus
 
 (def migration-config
-  {:store :database
+  {:store         :database
    :migration-dir "migrations"})
 
 (defn init-db
@@ -23,9 +23,9 @@
   "Increment credits for all users."
   [db-spec]
   (jdbc/execute! db-spec
-    (sql/format
-      (-> (h/update :users)
-          (h/set {:credits [:+ :credits 1]})))))
+                 (sql/format
+                   (-> (h/update :users)
+                       (h/set {:credits [:+ :credits 1]})))))
 
 (defn create-user
   "Insert a new user row. If a `:password` key is present its value is hashed
@@ -38,10 +38,10 @@
   [db-spec username]
   (first
     (jdbc/query db-spec
-      (sql/format
-        (-> (h/select :*)
-            (h/from :users)
-            (h/where [:= :username username]))))))
+                (sql/format
+                  (-> (h/select :*)
+                      (h/from :users)
+                      (h/where [:= :username username]))))))
 
 (defn authenticate
   "Return the user row if `username` and `password` match, otherwise nil."
@@ -55,7 +55,8 @@
   score is incremented; otherwise `target-id` is decremented. No-op if the
   acting user has no credits."
   [db-spec user-id action target-id]
-  (jdbc/with-db-transaction [tx db-spec]
+  (jdbc/with-db-transaction
+    [tx db-spec]
     (let [user (first
                  (jdbc/query tx
                              (sql/format
@@ -65,25 +66,24 @@
       (when (> (:credits user 0) 0)
         ;; Deduct one credit from the acting user
         (jdbc/execute! tx
-          (sql/format
-            (-> (h/update :users)
-                (h/set {:credits [:- :credits 1]})
-                (h/where [:= :id user-id]))))
+                       (sql/format
+                         (-> (h/update :users)
+                             (h/set {:credits [:- :credits 1]})
+                             (h/where [:= :id user-id]))))
         (if (= action :increment-self)
           ;; Increment the user's own score
           (jdbc/execute! tx
-            (sql/format
-              (-> (h/update :users)
-                  (h/set {:score [:+ :score 1]})
-                  (h/where [:= :id user-id]))))
+                         (sql/format
+                           (-> (h/update :users)
+                               (h/set {:score [:+ :score 1]})
+                               (h/where [:= :id user-id]))))
           ;; Otherwise decrement the target's score (if provided)
           (when target-id
             (jdbc/execute! tx
-              (sql/format
-                (-> (h/update :users)
-                    (h/set {:score [:- :score 1]})
-                    (h/where [:= :id target-id]))))))))))
-
+                           (sql/format
+                             (-> (h/update :users)
+                                 (h/set {:score [:- :score 1]})
+                                 (h/where [:= :id target-id]))))))))))
 ;; -----------------------------------------------------------------------------
 ;; Leaderboard utilities
 
@@ -99,7 +99,7 @@
       "afternoon" [:between hour-expr 12 17]
       "evening" [:between hour-expr 18 21]
       "night" [:or [:between hour-expr 22 23]
-                      [:between hour-expr 0 5]]
+               [:between hour-expr 0 5]]
       nil)))
 
 (defn build-leaderboard-query
@@ -129,34 +129,35 @@
 (defn create-leaderboard
   "Create a new leaderboard with the given filters and return its status."
   [db-spec creator-id name filters min-users]
-  (jdbc/with-db-transaction [tx db-spec]
+  (jdbc/with-db-transaction
+    [tx db-spec]
     (jdbc/insert! tx :leaderboards
                   {:creator_id creator-id
-                   :name name
-                   :filters (cheshire/generate-string filters)
-                   :min_users min-users})
+                   :name       name
+                   :filters    (cheshire/generate-string filters)
+                   :min_users  min-users})
     (let [users (jdbc/query tx (build-leaderboard-query tx filters min-users creator-id))]
       (if (and (>= (count users) min-users)
                ;; Ensure the creator is at the top of the sorted list
                (= (:id (first users)) creator-id))
         {:status :created :leaderboard users}
-        {:status :invalid
+        {:status  :invalid
          :message "Does not meet criteria"}))))
 
 (defn get-leaderboard
   "Return the leaderboard row and the associated users by applying the stored filters."
   [db-spec id]
   (let [lb (first
-            (jdbc/query db-spec
-              (sql/format
-                (-> (h/select :*)
-                    (h/from :leaderboards)
-                    (h/where [:= :id id])))))]
+             (jdbc/query db-spec
+                         (sql/format
+                           (-> (h/select :*)
+                               (h/from :leaderboards)
+                               (h/where [:= :id id])))))]
     {:leaderboard lb
-     :users (jdbc/query db-spec
-              (build-leaderboard-query
-                db-spec
-                (cheshire/parse-string (:filters lb) true)
-                (:min_users lb)
-                (:creator_id lb)))}))
+     :users       (jdbc/query db-spec
+                              (build-leaderboard-query
+                                db-spec
+                                (cheshire/parse-string (:filters lb) true)
+                                (:min_users lb)
+                                (:creator_id lb)))}))
 
