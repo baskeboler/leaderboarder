@@ -3,7 +3,8 @@
             [honey.sql :as sql]
             [honey.sql.helpers :as h]
             [cheshire.core :as cheshire]
-            [migratus.core :as migratus]))
+            [migratus.core :as migratus]
+            [buddy.hashers :as hashers]))
 
 ;; -----------------------------------------------------------------------------
 ;; Database initialization via Migratus
@@ -27,9 +28,10 @@
           (h/set {:credits [:+ :credits 1]})))))
 
 (defn create-user
-  "Insert a new user row."
+  "Insert a new user row. If a `:password` key is present its value is hashed
+  before storage."
   [db-spec user]
-  (jdbc/insert! db-spec :users user))
+  (jdbc/insert! db-spec :users (update user :password #(when % (hashers/derive %)))))
 
 (defn get-user
   "Retrieve a user row by username."
@@ -41,6 +43,13 @@
             (h/from :users)
             (h/where [:= :username username]))))))
 
+(defn authenticate
+  "Return the user row if `username` and `password` match, otherwise nil."
+  [db-spec username password]
+  (when-let [user (get-user db-spec username)]
+    (when (hashers/check password (:password user))
+      user)))
+
 (defn use-credit
   "Spend a credit for a user. If `action` is :increment-self the user's own
   score is incremented; otherwise `target-id` is decremented. No-op if the
@@ -48,11 +57,11 @@
   [db-spec user-id action target-id]
   (jdbc/with-db-transaction [tx db-spec]
     (let [user (first
-                (jdbc/query tx
-                  (sql/format
-                    (-> (h/select :credits :score)
-                        (h/from :users)
-                        (h/where [:= :id user-id])))))]
+                 (jdbc/query tx
+                             (sql/format
+                               (-> (h/select :credits :score)
+                                   (h/from :users)
+                                   (h/where [:= :id user-id])))))]
       (when (> (:credits user 0) 0)
         ;; Deduct one credit from the acting user
         (jdbc/execute! tx
@@ -73,7 +82,7 @@
               (sql/format
                 (-> (h/update :users)
                     (h/set {:score [:- :score 1]})
-                    (h/where [:= :id target-id])))))))))
+                    (h/where [:= :id target-id]))))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Leaderboard utilities
