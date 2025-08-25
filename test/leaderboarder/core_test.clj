@@ -7,8 +7,10 @@
   (testing "retrieve user after insert"
     (let [db {:dbtype "h2:mem" :dbname "userdb;DB_CLOSE_DELAY=-1"}
           db (db/init-db db)]
-      (db/create-user db {:username "alice"})
-      (is (= "alice" (:username (db/get-user db "alice")))))))
+      (db/create-user db {:username "alice" :password "secret"})
+      (is (= "alice" (:username (db/get-user db "alice"))))
+      (is (some? (db/authenticate db "alice" "secret")))
+      (is (nil? (db/authenticate db "alice" "wrong"))))))
 
 (deftest use-credit-test
     (testing "credits increment and decrement operations"

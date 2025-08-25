@@ -11,8 +11,11 @@
     [clojurewerkz.quartzite.scheduler :as qs]
     [clojurewerkz.quartzite.jobs :as jobs]
     [clojurewerkz.quartzite.triggers :as t]
-    [clojurewerkz.quartzite.schedule.simple :as s])
+    [clojurewerkz.quartzite.schedule.simple :as s]
+    [clojure.string :as str])
   (:gen-class))
+
+(def tokens (atom {}))
 
 ;; -----------------------------------------------------------------------------
 ;; Periodic credit incrementer
@@ -63,30 +66,51 @@
   (routes
     (GET "/" [] (response "Welcome to Leaderboarder API MVP"))
     (POST "/users" req
-      ;; Expect JSON body with :username and optional profile fields
+      ;; Expect JSON body with :username, :password and optional profile fields
       (let [body (:body req)]
-        (db/create-user db-spec (select-keys body [:username :geography :sex :age_group]))
+        (db/create-user db-spec (select-keys body [:username :password :geography :sex :age_group]))
         (response {:message "User created"})))
+    (POST "/login" req
+      (let [{:keys [username password]} (:body req)]
+        (if-let [user (db/authenticate db-spec username password)]
+          (let [token (str (java.util.UUID/randomUUID))]
+            (swap! tokens assoc token (:id user))
+            (response {:token token}))
+          {:status 401 :body {:error "Invalid credentials"}})))
     (POST "/credits/use" req
-      ;; Spend a credit: body should contain :user_id, :action and optional :target_id
-      (let [{:keys [user_id action target_id]} (:body req)
+      ;; Spend a credit: body should contain :action and optional :target_id
+      (let [{:keys [action target_id]} (:body req)
+            user-id (:user-id req)
             ;; Convert the action string into a keyword to match our use-credit function
             act (if (keyword? action) action (keyword action))]
-        (db/use-credit db-spec user_id act target_id)
+        (db/use-credit db-spec user-id act target_id)
         (response {:message "Credit used"})))
     (POST "/leaderboards" req
       ;; Create a new filtered leaderboard
-      (let [{:keys [creator_id name filters min_users]} (:body req)]
+      (let [{:keys [name filters min_users]} (:body req)
+            creator-id (:user-id req)]
         (response
-          (db/create-leaderboard db-spec creator_id name filters min_users))))
+          (db/create-leaderboard db-spec creator-id name filters min_users))))
     (GET "/leaderboards/:id" [id]
       (response (db/get-leaderboard db-spec (Integer/parseInt id))))
     (route/not-found "Not Found")))
+
+(defn wrap-auth [handler]
+  (fn [req]
+    (if (#{"/" "/users" "/login"} (:uri req))
+      (handler req)
+      (if-let [auth (get-in req [:headers "authorization"])]
+        (let [token (last (str/split auth #" "))]
+          (if-let [uid (@tokens token)]
+            (handler (assoc req :user-id uid))
+            {:status 401 :body {:error "Unauthorized"}}))
+        {:status 401 :body {:error "Unauthorized"}}))))
 
 (defn make-handler
   "Wrap the routes in JSON and site defaults middleware."
   [routes]
   (-> routes
+      wrap-auth
       (wrap-json-body {:keywords? true})
       (wrap-json-response)
       (wrap-defaults site-defaults)))
