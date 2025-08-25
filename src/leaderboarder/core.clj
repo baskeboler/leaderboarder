@@ -5,7 +5,7 @@
     [compojure.route :as route]
     [ring.middleware.defaults :refer [wrap-defaults site-defaults]]
     [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
-    [ring.util.response :refer [response]]
+    [ring.util.response :refer [response resource-response]]
     [ring.adapter.jetty :as jetty]
     [leaderboarder.db :as db]
     [clojurewerkz.quartzite.scheduler :as qs]
@@ -65,7 +65,7 @@
   "Construct the Compojure route definitions bound to a particular db-spec."
   [db-spec]
   (routes
-    (GET "/" [] (response "Welcome to Leaderboarder API MVP"))
+    (GET "/" [] (resource-response "index.html"))
     (POST "/users" req
       ;; Expect JSON body with :username, :password and optional profile fields
       (let [body (:body req)]
