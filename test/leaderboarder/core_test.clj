@@ -35,7 +35,7 @@
 
 (deftest time-of-day-predicate-test
   (testing "time-of-day filters"
-      (let [hour (sql/format [:raw "EXTRACT(HOUR FROM last_active)"])]
+      (let [hour [:raw "EXTRACT(HOUR FROM last_active)"]]
         (is (= [:between hour 6 11]
                (#'db/time-of-day->predicate "morning")))
         (is (= [:or [:between hour 22 23] [:between hour 0 5]]

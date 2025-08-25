@@ -69,8 +69,16 @@
     (POST "/users" req
       ;; Expect JSON body with :username, :password and optional profile fields
       (let [body (:body req)]
-        (db/create-user db-spec (select-keys body [:username :password :geography :sex :age_group]))
-        (response {:message "User created"})))
+        (try
+          (db/create-user db-spec (select-keys body [:username :password :geography :sex :age_group]))
+          (response {:message "User created"})
+          (catch Exception e
+            (let [msg (or (.getMessage e) "")
+                  cause (or (.getMessage (.getCause e)) "")
+                  m (str msg " " cause)]
+              (if (re-find #"(?i)unique|23505" m)
+                {:status 409 :body {:error "Username already exists"}}
+                {:status 400 :body {:error "Unable to create user"}}))))))
     (POST "/login" req
       (let [{:keys [username password]} (:body req)]
         (if-let [user (db/authenticate db-spec username password)]
@@ -84,15 +92,25 @@
             user-id (:user-id req)
             ;; Convert the action string into a keyword to match our use-credit function
             act (if (keyword? action) action (keyword action))]
-        (db/use-credit db-spec user-id act target_id)
-        (response {:message "Credit used"})))
+        (db/touch-last-active db-spec user-id)
+        (try
+          (db/use-credit db-spec user-id act target_id)
+          (response {:message "Credit used"})
+          (catch clojure.lang.ExceptionInfo e
+            (let [{:keys [type]} (ex-data e)]
+              (if (= type :validation)
+                {:status 400 :body {:error (.getMessage e)}}
+                {:status 500 :body {:error "Unable to use credit"}}))))))
     (POST "/leaderboards" req
       ;; Create a new filtered leaderboard
       (let [{:keys [name filters min_users]} (:body req)
             creator-id (:user-id req)]
+        (db/touch-last-active db-spec creator-id)
         (response
           (db/create-leaderboard db-spec creator-id name filters min_users))))
-    (GET "/leaderboards/:id" [id]
+    (GET "/leaderboards/:id" [id :as req]
+      (when-let [uid (:user-id req)]
+        (db/touch-last-active db-spec uid))
       (response (db/get-leaderboard db-spec (Integer/parseInt id))))
     (route/not-found "Not Found")))
 
@@ -146,16 +164,40 @@
   (.stop server))
 
 ;; -----------------------------------------------------------------------------
-;; Application configuration
+;; Application configuration (environment-driven)
 
-(def config
-  {:db/spec {:dbtype "h2:mem" :dbname "leaderboarder-mvp"}
-   :credit/incrementer {:db-spec (ig/ref :db/spec)
-                        :interval-ms (* 60 1000)}
-   :handler/routes {:db-spec (ig/ref :db/spec)}
-   :handler/app {:routes (ig/ref :handler/routes)}
-   :server/jetty {:handler (ig/ref :handler/app)
-                  :port 3000}})
+(defn- getenv
+  "Read an environment variable, returning default if missing or blank."
+  [k default]
+  (let [v (System/getenv k)]
+    (if (and v (not (str/blank? v))) v default)))
+
+(defn- parse-long-safe [s default]
+  (try
+    (Long/parseLong (str s))
+    (catch Exception _ default)))
+
+(defn- build-db-spec []
+  ;; Support a full JDBC URL via DB_URL; otherwise default to in-memory H2.
+  (if-let [jdbc-url (let [u (System/getenv "DB_URL")] (when (and u (not (str/blank? u))) u))]
+    {:connection-uri jdbc-url}
+    (let [dbtype (getenv "DB_TYPE" "h2:mem")
+          dbname (getenv "DB_NAME" "leaderboarder-mvp")]
+      {:dbtype dbtype :dbname dbname})))
+
+(defn build-config []
+  (let [port (parse-long-safe (getenv "PORT" "3000") 3000)
+        interval (parse-long-safe (getenv "SCHEDULER_INTERVAL_MS" (str (* 60 1000))) (* 60 1000))
+        db-spec (build-db-spec)]
+    {:db/spec db-spec
+     :credit/incrementer {:db-spec (ig/ref :db/spec)
+                          :interval-ms interval}
+     :handler/routes {:db-spec (ig/ref :db/spec)}
+     :handler/app {:routes (ig/ref :handler/routes)}
+     :server/jetty {:handler (ig/ref :handler/app)
+                    :port port}}))
+
+(def config (build-config))
 
 ;; -----------------------------------------------------------------------------
 ;; Entry point
@@ -165,4 +207,4 @@
   ;; Initialize the system.  The returned map of component instances is not
   ;; used here but could be bound to a var for later introspection or for
   ;; manual shutdown.
-  (ig/init config))
+  (ig/init (build-config)))

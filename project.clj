@@ -22,7 +22,7 @@
                  [ring/ring-defaults "0.4.0"]
                  [ring/ring-json "0.5.1"]
                  [ring/ring-jetty-adapter "1.9.6"]
-                 [org.clojure/java.jdbc "0.7.12"]
+                 [com.github.seancorfield/next.jdbc "1.3.939"]
                  [com.github.seancorfield/honeysql "2.6.1126"]
                  [integrant "0.8.1"]
                  [cheshire "5.13.0"]

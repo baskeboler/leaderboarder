@@ -1,10 +1,12 @@
 (ns leaderboarder.db
-  (:require [clojure.java.jdbc :as jdbc]
+  (:require [next.jdbc :as jdbc]
+            [next.jdbc.sql :as sqlx]
             [honey.sql :as sql]
             [honey.sql.helpers :as h]
             [cheshire.core :as cheshire]
             [migratus.core :as migratus]
-            [buddy.hashers :as hashers]))
+            [buddy.hashers :as hashers]
+            [clojure.string :as str]))
 
 ;; -----------------------------------------------------------------------------
 ;; Database initialization via Migratus
@@ -22,26 +24,30 @@
 (defn increment-all-credits
   "Increment credits for all users."
   [db-spec]
-  (jdbc/execute! db-spec
+  (jdbc/execute! (jdbc/get-datasource db-spec)
                  (sql/format
                    (-> (h/update :users)
                        (h/set {:credits [:+ :credits 1]})))))
 
 (defn create-user
   "Insert a new user row. If a `:password` key is present its value is hashed
-  before storage."
+  before storage. Username is normalized (trimmed and lowercased)."
   [db-spec user]
-  (jdbc/insert! db-spec :users (update user :password #(when % (hashers/derive %)))))
+  (let [user (-> user
+                 (update :username #(some-> % str/trim str/lower-case))
+                 (update :password #(when % (hashers/derive %))))]
+    (sqlx/insert!
+      (jdbc/get-datasource db-spec) :users user {:return-keys true})))
 
 (defn get-user
   "Retrieve a user row by username."
   [db-spec username]
   (first
-    (jdbc/query db-spec
-                (sql/format
-                  (-> (h/select :*)
-                      (h/from :users)
-                      (h/where [:= :username username]))))))
+    (jdbc/execute! (jdbc/get-datasource db-spec)
+                   (sql/format
+                     (-> (h/select :*)
+                         (h/from :users)
+                         (h/where [:= :username username]))))))
 
 (defn authenticate
   "Return the user row if `username` and `password` match, otherwise nil."
@@ -50,40 +56,49 @@
     (when (hashers/check password (:password user))
       user)))
 
+(def ^:private allowed-actions
+  "Whitelist of permitted credit actions."
+  #{:increment-self :attack})
+
 (defn use-credit
-  "Spend a credit for a user. If `action` is :increment-self the user's own
-  score is incremented; otherwise `target-id` is decremented. No-op if the
-  acting user has no credits."
+  "Spend a credit for a user using a race-safe conditional decrement.
+  If `action` is :increment-self the user's own score is incremented; otherwise
+  `target-id` is decremented when provided. Returns true when a credit was used,
+  false when no credit was available. Throws ex-info on invalid action."
   [db-spec user-id action target-id]
-  (jdbc/with-db-transaction
-    [tx db-spec]
-    (let [user (first
-                 (jdbc/query tx
-                             (sql/format
-                               (-> (h/select :credits :score)
-                                   (h/from :users)
-                                   (h/where [:= :id user-id])))))]
-      (when (> (:credits user 0) 0)
-        ;; Deduct one credit from the acting user
-        (jdbc/execute! tx
-                       (sql/format
-                         (-> (h/update :users)
-                             (h/set {:credits [:- :credits 1]})
-                             (h/where [:= :id user-id]))))
+  (when-not (allowed-actions action)
+    (throw (ex-info "Invalid action" {:type :validation :action action})))
+  (jdbc/with-transaction [tx (jdbc/get-datasource db-spec)]
+    (let [updated (first
+                    (jdbc/execute! tx
+                                   (sql/format
+                                     (-> (h/update :users)
+                                         (h/set {:credits [:- :credits 1]})
+                                         (h/where [:and [:= :id user-id]
+                                                       [:> :credits 0]])))))]
+      (when (= 1 updated)
         (if (= action :increment-self)
-          ;; Increment the user's own score
           (jdbc/execute! tx
                          (sql/format
                            (-> (h/update :users)
                                (h/set {:score [:+ :score 1]})
                                (h/where [:= :id user-id]))))
-          ;; Otherwise decrement the target's score (if provided)
           (when target-id
             (jdbc/execute! tx
                            (sql/format
                              (-> (h/update :users)
                                  (h/set {:score [:- :score 1]})
-                                 (h/where [:= :id target-id]))))))))))
+                                 (h/where [:= :id target-id])))))))
+      (= 1 updated))))
+
+(defn touch-last-active
+  "Update the user's last_active timestamp to the current time."
+  [db-spec user-id]
+  (jdbc/execute! (jdbc/get-datasource db-spec)
+                 (sql/format
+                   (-> (h/update :users)
+                       (h/set {:last_active [:raw "CURRENT_TIMESTAMP"]})
+                       (h/where [:= :id user-id])))))
 ;; -----------------------------------------------------------------------------
 ;; Leaderboard utilities
 
@@ -93,7 +108,7 @@
   "Return a HoneySQL predicate for a given time-of-day label, or nil if unsupported.
    Uses EXTRACT(HOUR FROM last_active), handling wrap-around for night."
   [value]
-  (let [hour-expr (sql/format [:raw "EXTRACT(HOUR FROM last_active)"])]
+  (let [hour-expr [:raw "EXTRACT(HOUR FROM last_active)"]]
     (case value
       "morning" [:between hour-expr 6 11]
       "afternoon" [:between hour-expr 12 17]
@@ -129,14 +144,14 @@
 (defn create-leaderboard
   "Create a new leaderboard with the given filters and return its status."
   [db-spec creator-id name filters min-users]
-  (jdbc/with-db-transaction
-    [tx db-spec]
-    (jdbc/insert! tx :leaderboards
+  (jdbc/with-transaction [tx (jdbc/get-datasource db-spec)]
+    (sqlx/insert! tx :leaderboards
                   {:creator_id creator-id
                    :name       name
                    :filters    (cheshire/generate-string filters)
-                   :min_users  min-users})
-    (let [users (jdbc/query tx (build-leaderboard-query tx filters min-users creator-id))]
+                   :min_users  min-users}
+                  {:return-keys true})
+    (let [users (jdbc/execute! tx (build-leaderboard-query tx filters min-users creator-id))]
       (if (and (>= (count users) min-users)
                ;; Ensure the creator is at the top of the sorted list
                (= (:id (first users)) creator-id))
@@ -147,17 +162,18 @@
 (defn get-leaderboard
   "Return the leaderboard row and the associated users by applying the stored filters."
   [db-spec id]
-  (let [lb (first
-             (jdbc/query db-spec
-                         (sql/format
-                           (-> (h/select :*)
-                               (h/from :leaderboards)
-                               (h/where [:= :id id])))))]
+  (let [ds (jdbc/get-datasource db-spec)
+        lb (first
+             (jdbc/execute! ds
+                            (sql/format
+                              (-> (h/select :*)
+                                  (h/from :leaderboards)
+                                  (h/where [:= :id id])))))]
     {:leaderboard lb
-     :users       (jdbc/query db-spec
-                              (build-leaderboard-query
-                                db-spec
-                                (cheshire/parse-string (:filters lb) true)
-                                (:min_users lb)
-                                (:creator_id lb)))}))
+     :users       (jdbc/execute! ds
+                                 (build-leaderboard-query
+                                   db-spec
+                                   (cheshire/parse-string (:filters lb) true)
+                                   (:min_users lb)
+                                   (:creator_id lb)))}))
 
