@@ -25,6 +25,8 @@
                  [com.github.seancorfield/honeysql "2.6.1126"]
                  [integrant "0.8.1"]
                  [cheshire "5.13.0"]
+                 [org.clojure/tools.logging "1.2.4"]
+                 [ch.qos.logback/logback-classic "1.4.11"]
                  [buddy/buddy-hashers "2.0.167"]
                  [clj-time "0.15.2"]
                  [com.h2database/h2 "2.3.232"]

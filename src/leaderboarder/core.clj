@@ -12,11 +12,62 @@
     [clojurewerkz.quartzite.jobs :as jobs]
     [clojurewerkz.quartzite.triggers :as t]
     [clojurewerkz.quartzite.schedule.simple :as s]
-    [clojure.string :as str])
+    [clojure.string :as str]
+    [clojure.tools.logging :as log])
   (:gen-class)
-  (:import (org.eclipse.jetty.server Server)))
+  (:import (org.eclipse.jetty.server Server)
+           (org.slf4j MDC)))
 
 (def tokens (atom {}))
+
+(defn wrap-correlation-id [handler]
+  (fn [req]
+    (let [cid (or (get-in req [:headers "x-correlation-id"])
+                  (str (java.util.UUID/randomUUID)))]
+      (MDC/put "correlation-id" cid)
+      (try
+        (-> (handler (assoc req :correlation-id cid))
+            (update :headers assoc "X-Correlation-ID" cid))
+        (finally
+          (MDC/remove "correlation-id"))))))
+
+(defn wrap-request-logging [handler]
+  (fn [req]
+    (let [cid (:correlation-id req)]
+      (log/info {:event :request/start
+                 :correlation-id cid
+                 :method (:request-method req)
+                 :uri (:uri req)})
+      (let [resp (handler req)
+            status (:status resp)]
+        (cond
+          (< status 400) (log/info {:event :request/end :correlation-id cid :status status})
+          (< status 500) (log/warn {:event :request/end :correlation-id cid :status status})
+          :else (log/error {:event :request/end :correlation-id cid :status status}))
+        resp))))
+
+(defn wrap-error-handling [handler]
+  (fn [req]
+    (try
+      (let [resp (handler req)]
+        (if (>= (or (:status resp) 200) 400)
+          (let [cid (:correlation-id req)
+                b (:body resp)
+                msg (cond
+                      (string? b) b
+                      (map? b) (or (:error b) "")
+                      :else "")
+                msg (if (str/blank? msg) "Error" msg)]
+            {:status (:status resp)
+             :headers (assoc (:headers resp) "Content-Type" "application/json")
+             :body {:error msg :correlation-id cid}})
+          resp))
+      (catch Exception e
+        (let [cid (:correlation-id req)]
+          (log/error e {:event :request/exception :correlation-id cid})
+          {:status 500
+           :headers {"Content-Type" "application/json"}
+           :body {:error "Internal server error" :correlation-id cid}}))))
 
 ;; -----------------------------------------------------------------------------
 ;; Periodic credit incrementer
@@ -26,12 +77,18 @@
 (jobs/defjob CreditIncrementJob [ctx]
   (let [data (.getMergedJobDataMap ctx)
         db-spec (.get data "db-spec")]
-    (db/increment-all-credits db-spec)))
+    (log/info {:event :scheduler/run :task :credit-increment})
+    (try
+      (db/increment-all-credits db-spec)
+      (log/info {:event :scheduler/run :task :credit-increment :status :success})
+      (catch Exception e
+        (log/error e {:event :scheduler/run :task :credit-increment :status :failure})))))
 
 (defn start-credit-incrementer
   "Initialize and start a Quartz scheduler that increments all user credits.
   Returns a map containing the scheduler and job identifiers."
   [db-spec interval-ms]
+  (log/info {:event :scheduler/start :task :credit-increment :interval-ms interval-ms})
   (let [scheduler (qs/start (qs/initialize))
         job-key (jobs/key "credit-incrementer-job")
         trigger-key (t/key "credit-incrementer-trigger")
@@ -51,6 +108,7 @@
 (defn stop-credit-incrementer
   "Unschedule the periodic credit incrementer job and shut down the scheduler."
   [{:keys [scheduler job-key trigger-key]}]
+  (log/info {:event :scheduler/stop :task :credit-increment})
   (when (and scheduler trigger-key)
     (qs/delete-trigger scheduler trigger-key))
   (when (and scheduler job-key)
@@ -80,12 +138,16 @@
                 {:status 409 :body {:error "Username already exists"}}
                 {:status 400 :body {:error "Unable to create user"}}))))))
     (POST "/login" req
-      (let [{:keys [username password]} (:body req)]
+      (let [{:keys [username password]} (:body req)
+            cid (:correlation-id req)]
         (if-let [user (db/authenticate db-spec username password)]
           (let [token (str (java.util.UUID/randomUUID))]
             (swap! tokens assoc token (:id user))
+            (log/info {:event :auth/login-success :username username :correlation-id cid})
             (response {:token token}))
-          {:status 401 :body {:error "Invalid credentials"}})))
+          (do
+            (log/warn {:event :auth/login-failure :username username :correlation-id cid})
+            {:status 401 :body {:error "Invalid credentials"}}))))
     (POST "/credits/use" req
       ;; Spend a credit: body should contain :action and optional :target_id
       (let [{:keys [action target_id]} (:body req)
@@ -119,11 +181,18 @@
     (if (#{"/" "/users" "/login"} (:uri req))
       (handler req)
       (if-let [auth (get-in req [:headers "authorization"])]
-        (let [token (last (str/split auth #" "))]
+        (let [token (last (str/split auth #" "))
+              cid (:correlation-id req)]
           (if-let [uid (@tokens token)]
-            (handler (assoc req :user-id uid))
-            {:status 401 :body {:error "Unauthorized"}}))
-        {:status 401 :body {:error "Unauthorized"}}))))
+            (do
+              (log/info {:event :auth/authorized :user-id uid :correlation-id cid})
+              (handler (assoc req :user-id uid)))
+            (do
+              (log/warn {:event :auth/invalid-token :token token :correlation-id cid})
+              {:status 401 :body {:error "Unauthorized"}})))
+        (do
+          (log/warn {:event :auth/missing-token :correlation-id (:correlation-id req)})
+          {:status 401 :body {:error "Unauthorized"}})))))
 
 (defn make-handler
   "Wrap the routes in JSON and site defaults middleware."
@@ -132,7 +201,10 @@
       wrap-auth
       (wrap-json-body {:keywords? true})
       (wrap-json-response)
-      (wrap-defaults site-defaults)))
+      (wrap-defaults site-defaults)
+      wrap-error-handling
+      wrap-request-logging
+      wrap-correlation-id))
 
 ;; -----------------------------------------------------------------------------
 ;; Integrant component definitions
