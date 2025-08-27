@@ -67,7 +67,7 @@
           (log/error e {:event :request/exception :correlation-id cid})
           {:status 500
            :headers {"Content-Type" "application/json"}
-           :body {:error "Internal server error" :correlation-id cid}}))))
+           :body {:error "Internal server error" :correlation-id cid}})))))
 
 ;; -----------------------------------------------------------------------------
 ;; Periodic credit incrementer

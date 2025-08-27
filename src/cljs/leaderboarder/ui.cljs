@@ -36,7 +36,7 @@
                 (let [m (js->clj res :keywordize-keys true)]
                   (rf/dispatch (conj on-success m)))))
        (.catch (fn [e]
-                 (rf/dispatch [:set-response {:error (.-message e)}])))))
+                 (rf/dispatch [:set-response {:error (.-message e)}]))))))
 
 (rf/reg-event-fx
  :api-request
@@ -110,18 +110,18 @@
     (fn []
       [:div {:class "mb-6"}
        [:h3 {:class "text-lg font-bold mb-2"} "Register"]
-       [:div {:class "flex flex-col space-y-2"}
-        [input {:placeholder "Username" :value (:username @form)
-                :on-change #(swap! form assoc :username (.. % -target -value))}]
-        [input {:type "password" :placeholder "Password" :value (:password @form)
-                :on-change #(swap! form assoc :password (.. % -target -value))}]
-        [input {:placeholder "Geography" :value (:geography @form)
-                :on-change #(swap! form assoc :geography (.. % -target -value))}]
-        [input {:placeholder "Sex" :value (:sex @form)
-                :on-change #(swap! form assoc :sex (.. % -target -value))}]
-        [input {:placeholder "Age group" :value (:age_group @form)
-                :on-change #(swap! form assoc :age_group (.. % -target -value))}]
-        [button "Create user" #(rf/dispatch [:register @form])]]]))))
+         [:div {:class "flex flex-col space-y-2"}
+          [input {:placeholder "Username" :value (:username @form)
+                  :on-change #(swap! form assoc :username (.. % -target -value))}]
+          [input {:type "password" :placeholder "Password" :value (:password @form)
+                  :on-change #(swap! form assoc :password (.. % -target -value))}]
+          [input {:placeholder "Geography" :value (:geography @form)
+                  :on-change #(swap! form assoc :geography (.. % -target -value))}]
+          [input {:placeholder "Sex" :value (:sex @form)
+                  :on-change #(swap! form assoc :sex (.. % -target -value))}]
+          [input {:placeholder "Age group" :value (:age_group @form)
+                  :on-change #(swap! form assoc :age_group (.. % -target -value))}]
+          [button "Create user" #(rf/dispatch [:register @form])]]])))
 
 (defn login-form []
   (let [form (r/atom {:username "" :password ""})]
@@ -165,7 +165,7 @@
                 :on-change #(swap! lb-form assoc :min_users (js/parseInt (.. % -target -value)))}]
         [button "Create" #(rf/dispatch [:create-leaderboard @lb-form])]]
        (when lb
-         [:pre {:class "bg-gray-100 p-2"} (pr-str lb)])]))
+         [:pre {:class "bg-gray-100 p-2"} (pr-str lb)])])))
 
 (defn app []
   (let [token @(rf/subscribe [:token])

@@ -59,8 +59,15 @@ Install JavaScript tooling and compile the browser bundle with
 
 ```
 npm install
+```
+
+During development you can rebuild the UI with:
+
+```
 npm run build
 ```
 
-The build outputs to `resources/public/js/app.js` which is referenced by
-`index.html`.
+Running `lein uberjar` automatically invokes the same build step and
+packages the generated assets under `resources/public` into the final
+jar. The build outputs to `resources/public/js/app.js` which is
+referenced by `index.html`.
