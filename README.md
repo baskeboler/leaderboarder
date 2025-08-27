@@ -51,3 +51,16 @@ lein test
 
 The test suite exercises key leaderboard functions such as user lookup,
 credit spending, and time-of-day filtering.
+
+### Building the ClojureScript frontend
+
+Install JavaScript tooling and compile the browser bundle with
+[`shadow-cljs`](https://shadow-cljs.github.io/docs/UsersGuide.html):
+
+```
+npm install
+npm run build
+```
+
+The build outputs to `resources/public/js/app.js` which is referenced by
+`index.html`.

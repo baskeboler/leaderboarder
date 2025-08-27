@@ -15,3 +15,6 @@ pom.xml.asc
 .cpcache/
 .idea
 /.clj-kondo
+
+node_modules/
+.shadow-cljs/
