@@ -53,6 +53,17 @@
                          (h/where [:= :username username])))
                    {:builder-fn rs/as-unqualified-lower-maps})))
 
+(defn get-user-by-id
+  "Retrieve a user row by id."
+  [db-spec id]
+  (first
+    (jdbc/execute! (jdbc/get-datasource db-spec)
+                   (sql/format
+                     (-> (h/select :*)
+                         (h/from :users)
+                         (h/where [:= :id id])))
+                   {:builder-fn rs/as-unqualified-lower-maps})))
+
 (defn authenticate
   "Return the user row if `username` and `password` match, otherwise nil."
   [db-spec username password]

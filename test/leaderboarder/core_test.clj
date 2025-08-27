@@ -1,7 +1,6 @@
 (ns leaderboarder.core-test
   (:require [clojure.test :refer [deftest is testing]]
-            [leaderboarder.db :as db]
-            [honey.sql :as sql]))
+            [leaderboarder.db :as db]))
 
 (deftest get-user-test
   (testing "retrieve user after insert"
@@ -41,4 +40,5 @@
         (is (= [:or [:between hour 22 23] [:between hour 0 5]]
                (#'db/time-of-day->predicate "night")))
         (is (nil? (#'db/time-of-day->predicate "dawn"))))))
+
 
