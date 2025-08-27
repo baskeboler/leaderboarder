@@ -16,7 +16,22 @@ jobs:
     - name: setup clojure
       uses: DeLaGuardo/setup-clojure@13.4
       with:
-        lein: latest        
+        lein: latest
+        cli: latest
+    - name: Cache clojure dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.m2/repository
+          ~/.gitlibs
+          ~/.deps.clj
+          .cpcache
+        # List all files containing dependencies:
+        key: cljdeps-${{ hashFiles('deps.edn') }}
+        # key: cljdeps-${{ hashFiles('deps.edn', 'bb.edn') }}
+        # key: cljdeps-${{ hashFiles('project.clj') }}
+        # key: cljdeps-${{ hashFiles('build.boot') }}
+        restore-keys: cljdeps-
     - name: Install dependencies
       run: lein deps
     - name: Run tests
