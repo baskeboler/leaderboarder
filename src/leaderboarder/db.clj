@@ -1,6 +1,7 @@
 (ns leaderboarder.db
   (:require [next.jdbc :as jdbc]
             [next.jdbc.sql :as sqlx]
+            [next.jdbc.result-set :as rs]
             [honey.sql :as sql]
             [honey.sql.helpers :as h]
             [cheshire.core :as cheshire]
@@ -37,7 +38,9 @@
                  (update :username #(some-> % str/trim str/lower-case))
                  (update :password #(when % (hashers/derive %))))]
     (sqlx/insert!
-      (jdbc/get-datasource db-spec) :users user {:return-keys true})))
+      (jdbc/get-datasource db-spec) :users user
+      {:return-keys true
+       :builder-fn rs/as-unqualified-lower-maps})))
 
 (defn get-user
   "Retrieve a user row by username."
@@ -47,7 +50,8 @@
                    (sql/format
                      (-> (h/select :*)
                          (h/from :users)
-                         (h/where [:= :username username]))))))
+                         (h/where [:= :username username])))
+                   {:builder-fn rs/as-unqualified-lower-maps})))
 
 (defn authenticate
   "Return the user row if `username` and `password` match, otherwise nil."
@@ -69,13 +73,14 @@
   (when-not (allowed-actions action)
     (throw (ex-info "Invalid action" {:type :validation :action action})))
   (jdbc/with-transaction [tx (jdbc/get-datasource db-spec)]
-    (let [updated (first
-                    (jdbc/execute! tx
-                                   (sql/format
-                                     (-> (h/update :users)
-                                         (h/set {:credits [:- :credits 1]})
-                                         (h/where [:and [:= :id user-id]
-                                                       [:> :credits 0]])))))]
+    (let [updated (-> (jdbc/execute! tx
+                                     (sql/format
+                                       (-> (h/update :users)
+                                           (h/set {:credits [:- :credits 1]})
+                                           (h/where [:and [:= :id user-id]
+                                                     [:> :credits 0]]))))
+                         first
+                         (get :next.jdbc/update-count))]
       (when (= 1 updated)
         (if (= action :increment-self)
           (jdbc/execute! tx
