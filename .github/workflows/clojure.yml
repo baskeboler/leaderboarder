@@ -13,6 +13,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - uses: DeLaGuardo/setup-clojure@13.4
     - name: Install dependencies
       run: lein deps
     - name: Run tests
