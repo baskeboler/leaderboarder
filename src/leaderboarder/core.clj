@@ -116,7 +116,6 @@
   (when scheduler
     (qs/shutdown scheduler)))
 
-;; -----------------------------------------------------------------------------
 ;; HTTP routes and handler
 
 (defn make-routes
@@ -144,20 +143,28 @@
           (let [token (str (java.util.UUID/randomUUID))]
             (swap! tokens assoc token (:id user))
             (log/info {:event :auth/login-success :username username :correlation-id cid})
-            (response {:token token}))
+            (response {:token token
+                       :credits (:credits user)
+                       :score (:score user)}))
           (do
             (log/warn {:event :auth/login-failure :username username :correlation-id cid})
             {:status 401 :body {:error "Invalid credentials"}}))))
+    (GET "/users/me" req
+      (let [uid (:user-id req)]
+        (when uid
+          (db/touch-last-active db-spec uid)
+          (response (select-keys (db/get-user-by-id db-spec uid) [:id :username :credits :score])))))
     (POST "/credits/use" req
-      ;; Spend a credit: body should contain :action and optional :target_id
-      (let [{:keys [action target_id]} (:body req)
+      ;; Spend a credit: body should contain :action and optional :target_id or :target_username
+      (let [{:keys [action target_id target_username]} (:body req)
             user-id (:user-id req)
+            target-id (or target_id (some-> (and target_username (db/get-user db-spec (str/lower-case target_username))) :id))
             ;; Convert the action string into a keyword to match our use-credit function
             act (if (keyword? action) action (keyword action))]
         (db/touch-last-active db-spec user-id)
         (try
-          (db/use-credit db-spec user-id act target_id)
-          (response {:message "Credit used"})
+          (db/use-credit db-spec user-id act target-id)
+          (response (select-keys (db/get-user-by-id db-spec user-id) [:credits :score]))
           (catch clojure.lang.ExceptionInfo e
             (let [{:keys [type]} (ex-data e)]
               (if (= type :validation)
