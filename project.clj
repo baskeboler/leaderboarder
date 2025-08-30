@@ -34,4 +34,7 @@
                  [migratus "1.6.3"]]
   :main ^:skip-aot leaderboarder.core
   :target-path "target/%s"
-  :profiles {:uberjar {:aot :all}})
+  :plugins [[lein-shell "0.5.0"]]
+  :profiles {:uberjar {:aot :all
+                       :prep-tasks [["shell" "npm" "run" "build"]
+                                    "javac" "compile"]}})
