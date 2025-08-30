@@ -67,7 +67,7 @@
           (log/error e {:event :request/exception :correlation-id cid})
           {:status 500
            :headers {"Content-Type" "application/json"}
-           :body {:error "Internal server error" :correlation-id cid}}))))
+           :body {:error "Internal server error" :correlation-id cid}})))))
 
 ;; -----------------------------------------------------------------------------
 ;; Periodic credit incrementer
@@ -122,7 +122,8 @@
   "Construct the Compojure route definitions bound to a particular db-spec."
   [db-spec]
   (routes
-    (GET "/" [] (resource-response "index.html"))
+    (GET "/" _
+      (resource-response "/index.html"))
     (POST "/users" req
       ;; Expect JSON body with :username, :password and optional profile fields
       (let [body (:body req)]
@@ -185,7 +186,7 @@
 
 (defn wrap-auth [handler]
   (fn [req]
-    (if (#{"/" "/users" "/login"} (:uri req))
+    (if (#{"/" "/index.html" "/favicon.ico" "/users" "/login"} (:uri req))
       (handler req)
       (if-let [auth (get-in req [:headers "authorization"])]
         (let [token (last (str/split auth #" "))
@@ -196,10 +197,11 @@
               (handler (assoc req :user-id uid)))
             (do
               (log/warn {:event :auth/invalid-token :token token :correlation-id cid})
-              {:status 401 :body {:error "Unauthorized"}})))
+              {:status 401 :body "Unauthorized"})))
         (do
           (log/warn {:event :auth/missing-token :correlation-id (:correlation-id req)})
-          {:status 401 :body {:error "Unauthorized"}})))))
+
+          {:status 401 :body "Unauthorized"})))))
 
 (defn make-handler
   "Wrap the routes in JSON and site defaults middleware."
@@ -286,4 +288,4 @@
   ;; Initialize the system.  The returned map of component instances is not
   ;; used here but could be bound to a var for later introspection or for
   ;; manual shutdown.
-  (ig/init (build-config)))
+  (ig/init config))
